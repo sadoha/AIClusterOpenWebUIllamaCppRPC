@@ -56,17 +56,17 @@ open-webui           ghcr.io/open-webui/open-webui:main   Up 1 minute (healthy) 
 Utilize curl to perform administrative validation against the exposed endpoints.
 *   Validate Head Node Health Endpoint:
     ```Bash
-    curl -f [http://127.0.0.1:8080/health](http://127.0.0.1:8080/health)
+    curl -f http://127.0.0.1:8080/health
     ```
     Expected Response: `{"status":"ok"}`
 *   Validate the Loaded Model Configuration:
     Ensure the Gemma 3 1B model is indexed properly across the distributed cluster.
     ```Bash
-    curl -s [http://127.0.0.1:8080/v1/models](http://127.0.0.1:8080/v1/models) | grep gemma
+    curl -s http://127.0.0.1:8080/v1/models | grep gemma
     ```
 *   Validate Open WebUI Routing:
     ```Bash
-    curl -f -I [http://127.0.0.1:3000/health](http://127.0.0.1:3000/health)
+    curl -f -I http://127.0.0.1:3000/health
     ```
     Expected Response: An HTTP header indicating `HTTP/1.1 200 OK.`
 
