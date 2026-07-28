@@ -71,6 +71,8 @@ Utilize curl to perform administrative validation against the exposed endpoints.
     Expected Response: An HTTP header indicating `HTTP/1.1 200 OK.`
 
 ## User Access
-Once the native compilation completes and health checks clear, open a web browser and navigate to: 
-```http://localhost:3000```
+*   Once the native compilation completes and health checks clear, open a web browser and navigate to: 
+```Bash
+http://localhost:3000
+```
 Create your initial administrative account and begin utilizing the distributed infrastructure.
