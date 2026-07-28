@@ -1,0 +1,194 @@
+# Official Docker Compose Specification: https://docs.docker.com/compose/compose-file/
+services:
+  # ---------------------------------------------------------
+  # INIT SERVICE: Automated Model Downloader
+  # ---------------------------------------------------------
+  model-downloader:
+    image: alpine:latest
+    container_name: model-downloader
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - model-data:/models
+    command: >
+      /bin/sh -c "
+      apk add --no-cache curl &&
+      if [ ! -f /models/gemma-3-1b-it-Q4_K_M.gguf ]; then
+        echo 'Downloading Gemma 3 1B IT GGUF...' &&
+        curl -f -L -H \"Authorization: Bearer $${HF_TOKEN}\" -o /models/gemma-3-1b-it-Q4_K_M.gguf https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf;
+      else
+        echo 'Gemma 3 1B model file already exists. Skipping download.';
+      fi
+      "
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------
+  # WORKER NODE 1: Custom Compiled llama.cpp RPC Server
+  # Official RPC Docs: https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md
+  # ---------------------------------------------------------
+  llama-rpc-worker-1:
+    build:
+      context: https://github.com/ggml-org/llama.cpp.git#master
+      dockerfile_inline: |
+        FROM ubuntu:24.04 AS builder
+        RUN apt-get update && apt-get install -y cmake g++ make git
+        COPY . /app
+        WORKDIR /app
+        # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
+        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
+        RUN cmake --build build --config Release --target install 
+
+        FROM ubuntu:24.04
+        RUN apt-get update && apt-get install -y libgomp1 && rm -rf /var/lib/apt/lists/*
+        COPY --from=builder /out /usr/local
+        RUN ldconfig
+        ENTRYPOINT ["ggml-rpc-server"]
+    container_name: llama-rpc-worker-1
+    restart: unless-stopped
+    networks:
+      - ai-internal-net
+    command: >
+      --host 0.0.0.0
+      --port 50052
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------
+  # WORKER NODE 2: Custom Compiled llama.cpp RPC Server
+  # ---------------------------------------------------------
+  llama-rpc-worker-2:
+    build:
+      context: https://github.com/ggml-org/llama.cpp.git#master
+      dockerfile_inline: |
+        FROM ubuntu:24.04 AS builder
+        RUN apt-get update && apt-get install -y cmake g++ make git
+        COPY . /app
+        WORKDIR /app
+        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
+        RUN cmake --build build --config Release --target install 
+
+        FROM ubuntu:24.04
+        RUN apt-get update && apt-get install -y libgomp1 && rm -rf /var/lib/apt/lists/*
+        COPY --from=builder /out /usr/local
+        RUN ldconfig
+        ENTRYPOINT ["ggml-rpc-server"]
+    container_name: llama-rpc-worker-2
+    restart: unless-stopped
+    networks:
+      - ai-internal-net
+    command: >
+      --host 0.0.0.0
+      --port 50052
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------
+  # HEAD NODE: Custom Compiled llama.cpp HTTP Server
+  # ---------------------------------------------------------
+  llama-server-head:
+    build:
+      context: https://github.com/ggml-org/llama.cpp.git#master
+      dockerfile_inline: |
+        FROM ubuntu:24.04 AS builder
+        RUN apt-get update && apt-get install -y cmake g++ make git
+        COPY . /app
+        WORKDIR /app
+        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
+        RUN cmake --build build --config Release --target install 
+
+        FROM ubuntu:24.04
+        RUN apt-get update && apt-get install -y libgomp1 curl && rm -rf /var/lib/apt/lists/*
+        COPY --from=builder /out /usr/local
+        RUN ldconfig
+        ENTRYPOINT ["llama-server"]
+    container_name: llama-server-head
+    restart: unless-stopped
+    networks:
+      - ai-internal-net
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - model-data:/models:ro
+    depends_on:
+      model-downloader:
+        condition: service_completed_successfully
+      llama-rpc-worker-1:
+        condition: service_started
+      llama-rpc-worker-2:
+        condition: service_started
+    command: >
+      -m /models/gemma-3-1b-it-Q4_K_M.gguf
+      --host 0.0.0.0
+      --port 8080
+      -c 8192
+      -t 4
+      --rpc llama-rpc-worker-1:50052,llama-rpc-worker-2:50052
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ---------------------------------------------------------
+  # FRONTEND SERVICE: Open WebUI
+  # Official Open WebUI Docs: https://docs.openwebui.com/
+  # Official Docker Open WebUI Integration: https://docs.docker.com/ai/model-runner/openwebui-integration/
+  # ---------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    networks:
+      - ai-internal-net
+    ports:
+      # Expose the web interface port to host
+      - "0.0.0.0:3000:8080"
+    environment:
+      # Connects Open WebUI to the internal llama.cpp head node API
+      - OPENAI_API_BASE_URL=http://llama-server-head:8080/v1
+      - OPENAI_API_KEY=not-needed
+      - WEBUI_AUTH=true
+    volumes:
+      # Managed volume for user data, settings, and chat history storage
+      - open-webui-data:/app/backend/data
+    depends_on:
+      llama-server-head:
+        # Prevents Open WebUI from starting until the head node passes its healthcheck
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# ---------------------------------------------------------
+# ISOLATED NETWORKS & PERSISTENT VOLUMES
+# Official Docker Networking Docs: https://docs.docker.com/engine/network/
+# Official Docker Volumes Docs: https://docs.docker.com/engine/storage/volumes/
+# ---------------------------------------------------------
+networks:
+  ai-internal-net:
+    driver: bridge
+
+volumes:
+  model-data:
+    driver: local
+  open-webui-data:
+    driver: local

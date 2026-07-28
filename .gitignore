@@ -1,0 +1,21 @@
+# Official Gitignore Reference: https://git-scm.com/docs/gitignore
+
+# Environment variables containing sensitive keys or credentials
+.env
+.env.local
+.env.*.local
+
+# Operating System metadata files
+.DS_Store
+Thumbs.db
+
+# Docker volumes, data directories, and temporary files
+*.log
+*.tmp
+*.swp
+data/
+models/
+
+# Large Language Model weight files (GGUF binaries)
+*.gguf
+*.bin
