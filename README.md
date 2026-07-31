@@ -1,4 +1,7 @@
 # Distributed AI Cluster: Open WebUI & llama.cpp RPC (1 Head, 2 Workers)
+<p align="center">
+  <img src="logo.jpeg" alt="Logo"/>
+</p>
 
 **Script created by:** andrii.sadovskyi@gmail.com  
 **Core Model:** Gemma-3-1B-IT (Q4_K_M)
