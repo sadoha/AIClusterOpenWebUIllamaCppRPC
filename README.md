@@ -56,7 +56,20 @@ Findings are ordered by severity and include what was changed.
    - Rationale: deterministic ARM64 deployment for Raspberry Pi 5.
    - Reference: https://docs.docker.com/build/building/multi-platform/
 
-6. Low: Build stages installed packages without `--no-install-recommends`.
+6. Medium: Mutable upstream sources (`master`, `main`, `latest`) were used for remote builds and images.
+   - Change applied: pinned `llama.cpp` to a specific upstream commit, pinned Open WebUI to `v0.11.0`, pinned Hermes Agent to `v2026.7.30`, and pinned the downloader image to Alpine `3.22`.
+   - Rationale: reduces supply-chain drift and makes rebuilds auditable and reproducible.
+   - References:
+     - https://docs.docker.com/develop/develop-images/dockerfile_best-practices/
+     - https://github.com/open-webui/open-webui/releases
+     - https://github.com/NousResearch/hermes-agent/releases
+
+7. Medium: Telegram access defaults were permissive in the active deployment configuration.
+   - Change applied: restored `GATEWAY_ALLOW_ALL_USERS=false` as the default in both Compose fallbacks and environment templates.
+   - Rationale: deny-by-default access policy is safer than exposing the bot to every Telegram user.
+   - Reference: https://hermes-agent.nousresearch.com/docs/user-guide/docker
+
+8. Low: Build stages installed packages without `--no-install-recommends`.
    - Change applied: added `--no-install-recommends` to builder package installs.
    - Rationale: smaller build surface and fewer unnecessary packages.
    - Reference: https://docs.docker.com/engine/security/
@@ -80,6 +93,7 @@ Findings are ordered by severity and include what was changed.
 
 - Added `.env.example` with documented defaults for:
   - ARM64 platform selection
+   - Pinned image and source versions
   - llama.cpp context and thread tuning
   - Hermes API key and dashboard auth
    - Hermes API server opt-in (`API_SERVER_ENABLED=false` by default)
@@ -111,6 +125,11 @@ This stack is adapted for Raspberry Pi 5 by default:
 
 The Compose stack enforces the following controls:
 
+- Pinned upstream versions for mutable image and source references:
+   - `ALPINE_VERSION=3.22`
+   - `LLAMA_CPP_REF=ddd4ec1428a6201e18975ea52b07c71e0f9aef26` (release `b10217`)
+   - `OPEN_WEBUI_VERSION=v0.11.0`
+   - `HERMES_AGENT_VERSION=v2026.7.30`
 - `cap_drop: [ALL]` on services
 - `security_opt: [no-new-privileges:true]` on services
 - Loopback-only host publication for sensitive surfaces by default:
@@ -155,9 +174,11 @@ If you need Hermes OpenAI-compatible API access, also set:
 If you use messaging platforms, set explicit allowlists, for example:
 
 - `TELEGRAM_ALLOWED_USERS=<your_telegram_numeric_user_id>`
+- Or, if you intentionally want a public bot, set `GATEWAY_ALLOW_ALL_USERS=true`
 
 Default note:
 
+- `GATEWAY_ALLOW_ALL_USERS=false` keeps Telegram closed to unknown users by default.
 - `TELEGRAM_ALLOWED_USERS=0` is used as a secure sentinel value that grants access to nobody.
 - This keeps deny-by-default behavior explicit and prevents startup warnings about missing allowlists.
 
@@ -183,7 +204,7 @@ docker compose up -d --build
 
 What this does:
 
-- Builds ARM64 llama.cpp worker and head images.
+- Builds ARM64 llama.cpp worker and head images from the pinned `LLAMA_CPP_REF` source.
 - Downloads the GGUF model via `model-downloader`.
 - Starts RPC workers and head server.
 - Boots Hermes configuration one-shot service.

@@ -1,10 +1,44 @@
 # Official Docker Compose Specification: https://docs.docker.com/compose/compose-file/
+x-llama-build-common: &llama-build-common
+  context: https://github.com/ggml-org/llama.cpp.git#${LLAMA_CPP_REF:-ddd4ec1428a6201e18975ea52b07c71e0f9aef26}
+  dockerfile_inline: |
+    ARG LLAMA_RUNTIME_PACKAGES
+    ARG LLAMA_ENTRYPOINT
+    FROM ubuntu:24.04 AS builder
+    RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
+    COPY . /app
+    WORKDIR /app
+    # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
+    RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
+    RUN cmake --build build --config Release --target install
+
+    FROM ubuntu:24.04
+    ARG LLAMA_RUNTIME_PACKAGES
+    ARG LLAMA_ENTRYPOINT
+    RUN apt-get update && apt-get install -y $${LLAMA_RUNTIME_PACKAGES} && rm -rf /var/lib/apt/lists/*
+    COPY --from=builder /out /usr/local
+    RUN ldconfig
+    ENV LLAMA_ENTRYPOINT=$${LLAMA_ENTRYPOINT}
+    ENTRYPOINT ["/bin/sh", "-c", "exec \"$$LLAMA_ENTRYPOINT\" \"$$@\"", "--"]
+
+x-llama-rpc-worker-build: &llama-rpc-worker-build
+  <<: *llama-build-common
+  args:
+    LLAMA_RUNTIME_PACKAGES: libgomp1
+    LLAMA_ENTRYPOINT: ggml-rpc-server
+
+x-llama-server-head-build: &llama-server-head-build
+  <<: *llama-build-common
+  args:
+    LLAMA_RUNTIME_PACKAGES: libgomp1 curl
+    LLAMA_ENTRYPOINT: llama-server
+
 services:
   # ---------------------------------------------------------
   # INIT SERVICE: Automated Model Downloader
   # ---------------------------------------------------------
   model-downloader:
-    image: alpine:latest
+    image: alpine:${ALPINE_VERSION:-3.22}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: model-downloader
     environment:
@@ -32,22 +66,7 @@ services:
   # ---------------------------------------------------------
   llama-rpc-worker-1:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    build:
-      context: https://github.com/ggml-org/llama.cpp.git#master
-      dockerfile_inline: |
-        FROM ubuntu:24.04 AS builder
-        RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
-        COPY . /app
-        WORKDIR /app
-        # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
-        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
-        RUN cmake --build build --config Release --target install
-
-        FROM ubuntu:24.04
-        RUN apt-get update && apt-get install -y libgomp1 && rm -rf /var/lib/apt/lists/*
-        COPY --from=builder /out /usr/local
-        RUN ldconfig
-        ENTRYPOINT ["ggml-rpc-server"]
+    build: *llama-rpc-worker-build
     container_name: llama-rpc-worker-1
     restart: unless-stopped
     networks:
@@ -65,21 +84,7 @@ services:
   # ---------------------------------------------------------
   llama-rpc-worker-2:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    build:
-      context: https://github.com/ggml-org/llama.cpp.git#master
-      dockerfile_inline: |
-        FROM ubuntu:24.04 AS builder
-        RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
-        COPY . /app
-        WORKDIR /app
-        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
-        RUN cmake --build build --config Release --target install
-
-        FROM ubuntu:24.04
-        RUN apt-get update && apt-get install -y libgomp1 && rm -rf /var/lib/apt/lists/*
-        COPY --from=builder /out /usr/local
-        RUN ldconfig
-        ENTRYPOINT ["ggml-rpc-server"]
+    build: *llama-rpc-worker-build
     container_name: llama-rpc-worker-2
     restart: unless-stopped
     networks:
@@ -97,21 +102,7 @@ services:
   # ---------------------------------------------------------
   llama-server-head:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    build:
-      context: https://github.com/ggml-org/llama.cpp.git#master
-      dockerfile_inline: |
-        FROM ubuntu:24.04 AS builder
-        RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
-        COPY . /app
-        WORKDIR /app
-        RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
-        RUN cmake --build build --config Release --target install
-
-        FROM ubuntu:24.04
-        RUN apt-get update && apt-get install -y libgomp1 curl && rm -rf /var/lib/apt/lists/*
-        COPY --from=builder /out /usr/local
-        RUN ldconfig
-        ENTRYPOINT ["llama-server"]
+    build: *llama-server-head-build
     container_name: llama-server-head
     restart: unless-stopped
     networks:
@@ -152,7 +143,7 @@ services:
   # Official Docker Open WebUI Integration: https://docs.docker.com/ai/model-runner/openwebui-integration/
   # ---------------------------------------------------------
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_VERSION:-v0.11.0}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: open-webui
     restart: unless-stopped
@@ -190,7 +181,7 @@ services:
   # Official Hermes Providers Docs: https://hermes-agent.nousresearch.com/docs/integrations/providers
   # ---------------------------------------------------------
   hermes-bootstrap:
-    image: nousresearch/hermes-agent:latest
+    image: nousresearch/hermes-agent:${HERMES_AGENT_VERSION:-v2026.7.30}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: hermes-bootstrap
     networks:
@@ -228,7 +219,7 @@ services:
   # Official Hermes Quickstart: https://hermes-agent.nousresearch.com/docs/getting-started/quickstart
   # ---------------------------------------------------------
   hermes-agent:
-    image: nousresearch/hermes-agent:latest
+    image: nousresearch/hermes-agent:${HERMES_AGENT_VERSION:-v2026.7.30}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: hermes-agent
     restart: unless-stopped
@@ -244,7 +235,7 @@ services:
       - API_SERVER_PORT=8642
       - API_SERVER_KEY=${API_SERVER_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - GATEWAY_ALLOW_ALL_USERS=${GATEWAY_ALLOW_ALL_USERS:-true}
+      - GATEWAY_ALLOW_ALL_USERS=${GATEWAY_ALLOW_ALL_USERS:-false}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS:-0}
       - HERMES_DASHBOARD=1
       - HERMES_DASHBOARD_HOST=0.0.0.0
