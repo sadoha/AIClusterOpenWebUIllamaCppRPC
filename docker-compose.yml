@@ -1,4 +1,11 @@
-# Official Docker Compose Specification: https://docs.docker.com/compose/compose-file/
+# Author: Andrii Sadovskyi <andrii.sadovskyi@gmail.com>
+#
+# This file defines a multi-container AI stack for local inference.
+# - Builds llama.cpp from source for RPC workers and the head server.
+# - Deploys Open WebUI for chat and Hermes Agent for tool use.
+# - Uses environment variables for dynamic configuration.
+# - Official Docs: https://docs.docker.com/compose/compose-file/
+
 x-llama-build-common: &llama-build-common
   context: https://github.com/ggml-org/llama.cpp.git#${LLAMA_CPP_REF:-ddd4ec1428a6201e18975ea52b07c71e0f9aef26}
   dockerfile_inline: |
@@ -33,6 +40,23 @@ x-llama-server-head-build: &llama-server-head-build
     LLAMA_RUNTIME_PACKAGES: libgomp1 curl
     LLAMA_ENTRYPOINT: llama-server
 
+x-llama-rpc-worker-common: &llama-rpc-worker-common
+  platform: ${DOCKER_PLATFORM:-linux/arm64}
+  build: *llama-rpc-worker-build
+  restart: unless-stopped
+  networks:
+    - ai-internal-net
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
+  user: "${UID:-1000}:${GID:-1000}"
+  deploy: # https://docs.docker.com/compose/compose-file/deploy/#resources
+    resources:
+      limits:
+        cpus: '${LLAMA_WORKER_CPUS:-1}'
+        memory: ${LLAMA_WORKER_MEMORY:-2G}
+
 services:
   # ---------------------------------------------------------
   # INIT SERVICE: Automated Model Downloader
@@ -41,24 +65,29 @@ services:
     image: alpine:${ALPINE_VERSION:-3.22}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: model-downloader
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      - MODEL_FILE=${MODEL_FILE:-gemma-3-1b-it-Q4_K_M.gguf}
+      - MODEL_DOWNLOAD_URL=${MODEL_DOWNLOAD_URL:-https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf}
     volumes:
       - model-data:/models
     command: >
       /bin/sh -c "
       apk add --no-cache curl &&
-      if [ ! -f /models/gemma-3-1b-it-Q4_K_M.gguf ]; then
-        echo 'Downloading Gemma 3 1B IT GGUF...' &&
-        curl -f -L -H \"Authorization: Bearer $${HF_TOKEN}\" -o /models/gemma-3-1b-it-Q4_K_M.gguf https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf;
+      if [ ! -f /models/$${MODEL_FILE} ]; then
+        echo 'Downloading model...' &&
+        curl -f -L -H \"Authorization: Bearer $${HF_TOKEN}\" -o /models/$${MODEL_FILE} $${MODEL_DOWNLOAD_URL};
       else
-        echo 'Gemma 3 1B model file already exists. Skipping download.';
+        echo 'Model file already exists. Skipping download.';
       fi
       "
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # This service runs `apk add` and needs write access to the root filesystem.
+    # `read_only: true` is omitted intentionally.
 
   # ---------------------------------------------------------
   # WORKER NODE 1: Custom Compiled llama.cpp RPC Server
@@ -66,36 +95,22 @@ services:
   # ---------------------------------------------------------
   llama-rpc-worker-1:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    build: *llama-rpc-worker-build
+    <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-1
-    restart: unless-stopped
-    networks:
-      - ai-internal-net
     command: >
       --host 0.0.0.0
       --port 50052
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
   # ---------------------------------------------------------
   # WORKER NODE 2: Custom Compiled llama.cpp RPC Server
   # ---------------------------------------------------------
   llama-rpc-worker-2:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    build: *llama-rpc-worker-build
+    <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-2
-    restart: unless-stopped
-    networks:
-      - ai-internal-net
     command: >
       --host 0.0.0.0
       --port 50052
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
   # ---------------------------------------------------------
   # HEAD NODE: Custom Compiled llama.cpp HTTP Server
@@ -107,8 +122,8 @@ services:
     restart: unless-stopped
     networks:
       - ai-internal-net
-    ports:
-      - "127.0.0.1:8080:8080"
+    ports: # https://docs.docker.com/compose/compose-file/05-services/#ports
+      - "${LLAMA_SERVER_HEAD_PORT:-127.0.0.1:8080}:8080"
     volumes:
       - model-data:/models:ro
     depends_on:
@@ -119,7 +134,7 @@ services:
       llama-rpc-worker-2:
         condition: service_started
     command: >
-      -m /models/gemma-3-1b-it-Q4_K_M.gguf
+      -m /models/${MODEL_FILE:-gemma-3-1b-it-Q4_K_M.gguf}
       --host 0.0.0.0
       --port 8080
       --jinja
@@ -128,14 +143,34 @@ services:
       --rpc llama-rpc-worker-1:50052,llama-rpc-worker-2:50052
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL    
-    healthcheck:
+    cap_drop: [ALL]
+    cap_add: # https://docs.docker.com/compose/compose-file/05-services/#cap_add
+      - IPC_LOCK
+    ulimits: # https://docs.docker.com/compose/compose-file/05-services/#ulimits
+      memlock:
+        soft: -1
+        hard: -1
+    read_only: true
+    user: "${UID:-1000}:${GID:-1000}"
+    deploy:
+      resources:
+        limits:
+          cpus: '${LLAMA_HEAD_CPUS:-2}'
+          memory: ${LLAMA_HEAD_MEMORY:-4G}
+    healthcheck: # https://docs.docker.com/compose/compose-file/05-services/#healthcheck
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
+    # To pass a GPU, uncomment the following: https://docs.docker.com/compose/gpu-support/
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
   # ---------------------------------------------------------
   # FRONTEND SERVICE: Open WebUI
@@ -150,8 +185,7 @@ services:
     networks:
       - ai-internal-net
     ports:
-      # Expose the web interface port to host
-      - "127.0.0.1:3000:8080"
+      - "${OPEN_WEBUI_PORT:-127.0.0.1:3000}:8080"
     environment:
       # Connects Open WebUI to the internal llama.cpp head node API
       - OPENAI_API_BASE_URL=http://llama-server-head:8080/v1
@@ -159,15 +193,23 @@ services:
       - WEBUI_AUTH=true
     volumes:
       # Managed volume for user data, settings, and chat history storage
-      - open-webui-data:/app/backend/data
+      - open-webui-data:/app/backend/data # Writable data volume
     depends_on:
       llama-server-head:
         # Prevents Open WebUI from starting until the head node passes its healthcheck
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
+    cap_drop: [ALL]
+    read_only: true
+    user: "${UID:-1000}:${GID:-1000}"
+    tmpfs: # https://docs.docker.com/storage/tmpfs/
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '${WEBUI_CPUS:-1}'
+          memory: ${WEBUI_MEMORY:-1G}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -194,18 +236,17 @@ services:
     command: >
       /bin/sh -c "
       set -eu;
+      echo 'Bootstrapping Hermes Agent configuration...';
       hermes config set model.provider custom;
       hermes config set model.base_url http://llama-server-head:8080/v1;
       hermes config set model.default $${HERMES_MODEL_ID};
       hermes config set model.context_length $${HERMES_CONTEXT_LENGTH};
       hermes config set model.api_key $${HERMES_MODEL_API_KEY};
-      hermes config set API_SERVER_ENABLED false;
-      hermes config set API_SERVER_HOST 127.0.0.1;
-      hermes config set GATEWAY_ALLOW_ALL_USERS $${GATEWAY_ALLOW_ALL_USERS};
-      hermes config set TELEGRAM_ALLOWED_USERS $${TELEGRAM_ALLOWED_USERS};
       hermes config set tool_loop_guardrails.hard_stop_enabled true;
       "
     environment:
+      # These env vars are used by the `hermes config set` commands above.
+      # They are not directly used by the container runtime itself.
       - HERMES_MODEL_ID=${HERMES_MODEL_ID:-gemma-3-1b-it-Q4_K_M}
       - HERMES_CONTEXT_LENGTH=${HERMES_CONTEXT_LENGTH:-65536}
       - HERMES_MODEL_API_KEY=${HERMES_MODEL_API_KEY:-none}
@@ -226,9 +267,9 @@ services:
     networks:
       - ai-internal-net
     command: gateway run
-    ports:
-      - "127.0.0.1:8642:8642"
-      - "127.0.0.1:9119:9119"
+    ports: # API and Dashboard ports
+      - "${HERMES_API_PORT:-127.0.0.1:8642}:8642"
+      - "${HERMES_DASHBOARD_PORT:-127.0.0.1:9119}:9119"
     environment:
       - API_SERVER_ENABLED=${API_SERVER_ENABLED:-false}
       - API_SERVER_HOST=${API_SERVER_HOST:-127.0.0.1}
@@ -257,11 +298,11 @@ services:
 # Official Docker Volumes Docs: https://docs.docker.com/engine/storage/volumes/
 # ---------------------------------------------------------
 networks:
-  ai-internal-net:
+  ai-internal-net: # https://docs.docker.com/network/bridge/
     driver: bridge
 
 volumes:
-  model-data:
+  model-data: # https://docs.docker.com/storage/volumes/
     driver: local
   open-webui-data:
     driver: local
