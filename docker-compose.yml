@@ -49,6 +49,12 @@ x-llama-rpc-worker-common: &llama-rpc-worker-common
   security_opt:
     - no-new-privileges:true
   cap_drop: [ALL]
+  cap_add: # https://docs.docker.com/compose/compose-file/05-services/#cap_add
+    - IPC_LOCK
+  ulimits: # https://docs.docker.com/compose/compose-file/05-services/#ulimits
+    memlock:
+      soft: -1
+      hard: -1
   read_only: true
   user: "${UID:-1000}:${GID:-1000}"
   deploy: # https://docs.docker.com/compose/compose-file/deploy/#resources
@@ -65,7 +71,6 @@ services:
     image: alpine:${ALPINE_VERSION:-3.22}
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     container_name: model-downloader
-    user: "${UID:-1000}:${GID:-1000}"
     environment:
       - HF_TOKEN=${HF_TOKEN}
       - MODEL_FILE=${MODEL_FILE:-gemma-3-1b-it-Q4_K_M.gguf}
@@ -86,8 +91,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # This service runs `apk add` and needs write access to the root filesystem.
-    # `read_only: true` is omitted intentionally.
+    # This service runs as root to execute `apk add`. It is a short-lived
+    # init container, so the security risk is minimal. `read_only: true`
+    # is also omitted to allow package installation.
 
   # ---------------------------------------------------------
   # WORKER NODE 1: Custom Compiled llama.cpp RPC Server
@@ -190,6 +196,7 @@ services:
       # Connects Open WebUI to the internal llama.cpp head node API
       - OPENAI_API_BASE_URL=http://llama-server-head:8080/v1
       - OPENAI_API_KEY=not-needed
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
       - WEBUI_AUTH=true
     volumes:
       # Managed volume for user data, settings, and chat history storage
@@ -202,9 +209,11 @@ services:
       - no-new-privileges:true
     cap_drop: [ALL]
     read_only: true
-    user: "${UID:-1000}:${GID:-1000}"
-    tmpfs: # https://docs.docker.com/storage/tmpfs/
+    # The user directive is omitted. The official Open WebUI image handles
+    # its own file permissions and drops privileges internally.
+    tmpfs: # Writable in-memory paths for runtime files
       - /tmp
+      - /app/backend/open_webui/static
     deploy:
       resources:
         limits:

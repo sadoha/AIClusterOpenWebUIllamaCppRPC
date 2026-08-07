@@ -1,11 +1,11 @@
 # Author: Andrii Sadovskyi <andrii.sadovskyi@gmail.com>
-# AI Cluster on Raspberry Pi 5 ARM64: llama.cpp RPC + Open WebUI + Hermes Agent
+# AI Cluster on Apple Silicon ARM64: llama.cpp RPC + Open WebUI + Hermes Agent
 
 <p align="center">
   <img src="logo.jpeg" alt="Project logo"/>
 </p>
 
-This project deploys a local AI stack for Raspberry Pi 5 using Docker Compose. It includes:
+This project deploys a local AI stack for Apple Silicon using Docker Compose. It includes:
 
 - `llama.cpp` distributed inference (`llama-server` head + two `ggml-rpc-server` workers)
 - `Open WebUI` as the human-facing interface
