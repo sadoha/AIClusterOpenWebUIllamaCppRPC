@@ -1,4 +1,3 @@
-# Author: Andrii Sadovskyi <andrii.sadovskyi@gmail.com>
 # AI Cluster on Apple Silicon ARM64: llama.cpp RPC + Open WebUI + Hermes Agent
 
 <p align="center">
@@ -56,3 +55,6 @@ This project deploys a local AI stack for Apple Silicon using Docker Compose. It
 -   llama.cpp Server
 -   Open WebUI Docs
 -   Hermes Agent Docker Guide
+
+---
+Author: Andrii Sadovskyi &lt;andrii.sadovskyi@gmail.com&gt;

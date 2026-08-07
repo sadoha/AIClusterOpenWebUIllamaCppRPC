@@ -5,7 +5,6 @@
 # - Deploys Open WebUI for chat and Hermes Agent for tool use.
 # - Uses environment variables for dynamic configuration.
 # - Official Docs: https://docs.docker.com/compose/compose-file/
-
 x-llama-build-common: &llama-build-common
   context: https://github.com/ggml-org/llama.cpp.git#${LLAMA_CPP_REF:-ddd4ec1428a6201e18975ea52b07c71e0f9aef26}
   dockerfile_inline: |
@@ -16,9 +15,9 @@ x-llama-build-common: &llama-build-common
     COPY . /app
     WORKDIR /app
     # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
-    RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out
+    # For GPU support, add appropriate flags, e.g., -DGGML_CUDA=ON for NVIDIA
+    RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out 
     RUN cmake --build build --config Release --target install
-
     FROM ubuntu:24.04
     ARG LLAMA_RUNTIME_PACKAGES
     ARG LLAMA_ENTRYPOINT
@@ -27,19 +26,16 @@ x-llama-build-common: &llama-build-common
     RUN ldconfig
     ENV LLAMA_ENTRYPOINT=$${LLAMA_ENTRYPOINT}
     ENTRYPOINT ["/bin/sh", "-c", "exec \"$$LLAMA_ENTRYPOINT\" \"$$@\"", "--"]
-
 x-llama-rpc-worker-build: &llama-rpc-worker-build
   <<: *llama-build-common
   args:
     LLAMA_RUNTIME_PACKAGES: libgomp1
     LLAMA_ENTRYPOINT: ggml-rpc-server
-
 x-llama-server-head-build: &llama-server-head-build
   <<: *llama-build-common
   args:
     LLAMA_RUNTIME_PACKAGES: libgomp1 curl
     LLAMA_ENTRYPOINT: llama-server
-
 x-llama-rpc-worker-common: &llama-rpc-worker-common
   platform: ${DOCKER_PLATFORM:-linux/arm64}
   build: *llama-rpc-worker-build
@@ -57,12 +53,21 @@ x-llama-rpc-worker-common: &llama-rpc-worker-common
       hard: -1
   read_only: true
   user: "${UID:-1000}:${GID:-1000}"
+  command: >
+    --host 0.0.0.0
+    --port 50052
   deploy: # https://docs.docker.com/compose/compose-file/deploy/#resources
     resources:
       limits:
         cpus: '${LLAMA_WORKER_CPUS:-1}'
         memory: ${LLAMA_WORKER_MEMORY:-2G}
-
+    
+    # To pass a GPU, uncomment the following: https://docs.docker.com/compose/gpu-support/
+    # reservations:
+    #   devices:
+    #     - driver: nvidia
+    #       count: all
+    #       capabilities: [gpu]
 services:
   # ---------------------------------------------------------
   # INIT SERVICE: Automated Model Downloader
@@ -89,35 +94,23 @@ services:
       "
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
+    cap_drop: [ALL]
     # This service runs as root to execute `apk add`. It is a short-lived
     # init container, so the security risk is minimal. `read_only: true`
     # is also omitted to allow package installation.
-
   # ---------------------------------------------------------
   # WORKER NODE 1: Custom Compiled llama.cpp RPC Server
   # Official RPC Docs: https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md
   # ---------------------------------------------------------
   llama-rpc-worker-1:
-    platform: ${DOCKER_PLATFORM:-linux/arm64}
     <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-1
-    command: >
-      --host 0.0.0.0
-      --port 50052
-
   # ---------------------------------------------------------
   # WORKER NODE 2: Custom Compiled llama.cpp RPC Server
   # ---------------------------------------------------------
   llama-rpc-worker-2:
-    platform: ${DOCKER_PLATFORM:-linux/arm64}
     <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-2
-    command: >
-      --host 0.0.0.0
-      --port 50052
-
   # ---------------------------------------------------------
   # HEAD NODE: Custom Compiled llama.cpp HTTP Server
   # ---------------------------------------------------------
@@ -177,7 +170,6 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
-
   # ---------------------------------------------------------
   # FRONTEND SERVICE: Open WebUI
   # Official Open WebUI Docs: https://docs.openwebui.com/
@@ -208,10 +200,11 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    read_only: true
-    # The user directive is omitted. The official Open WebUI image handles
-    # its own file permissions and drops privileges internally.
-    tmpfs: # Writable in-memory paths for runtime files
+    read_only: true # Enforce immutable container filesystem.
+    # The `user` directive is omitted to allow the official image to manage its
+    # own permissions. It starts as root to prepare files/volumes, then drops
+    # privileges to a non-root user for the main application process.
+    tmpfs: # Provide writable, non-persistent paths for runtime files.
       - /tmp
       - /app/backend/open_webui/static
     deploy:
@@ -225,7 +218,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
   # ---------------------------------------------------------
   # INIT SERVICE: Hermes custom endpoint bootstrap for llama.cpp
   # Official Hermes Docker Docs: https://hermes-agent.nousresearch.com/docs/user-guide/docker
@@ -254,16 +246,16 @@ services:
       hermes config set tool_loop_guardrails.hard_stop_enabled true;
       "
     environment:
-      # These env vars are used by the `hermes config set` commands above.
-      # They are not directly used by the container runtime itself.
       - HERMES_MODEL_ID=${HERMES_MODEL_ID:-gemma-3-1b-it-Q4_K_M}
       - HERMES_CONTEXT_LENGTH=${HERMES_CONTEXT_LENGTH:-65536}
       - HERMES_MODEL_API_KEY=${HERMES_MODEL_API_KEY:-none}
       - GATEWAY_ALLOW_ALL_USERS=${GATEWAY_ALLOW_ALL_USERS:-false}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS:-0}
-    # The official Hermes container uses s6 overlay and must be able to
-    # manage uid/gid transitions during init.
-
+    deploy:
+      resources:
+        limits:
+          cpus: '${HERMES_CPUS:-1}'
+          memory: ${HERMES_MEMORY:-1G}
   # ---------------------------------------------------------
   # AGENT SERVICE: Hermes Agent Gateway
   # Official Hermes Quickstart: https://hermes-agent.nousresearch.com/docs/getting-started/quickstart
@@ -297,10 +289,7 @@ services:
       - hermes-data:/opt/data
     depends_on:
       hermes-bootstrap:
-        condition: service_completed_successfully
-    # The official Hermes container uses s6 overlay and must be able to
-    # manage uid/gid transitions during init.
-
+        condition: service_completed_successfully  
 # ---------------------------------------------------------
 # ISOLATED NETWORKS & PERSISTENT VOLUMES
 # Official Docker Networking Docs: https://docs.docker.com/engine/network/
@@ -309,7 +298,6 @@ services:
 networks:
   ai-internal-net: # https://docs.docker.com/network/bridge/
     driver: bridge
-
 volumes:
   model-data: # https://docs.docker.com/storage/volumes/
     driver: local
