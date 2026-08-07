@@ -63,14 +63,15 @@ x-llama-rpc-worker-common: &llama-rpc-worker-common
   deploy: # https://docs.docker.com/compose/compose-file/deploy/#resources
     resources:
       limits:
-        cpus: '${LLAMA_WORKER_CPUS:-1}'
+        cpus: '${LLAMA_WORKER_CPUS:-2}'
         memory: ${LLAMA_WORKER_MEMORY:-2G}
-    # To pass a GPU, uncomment the following: https://docs.docker.com/compose/gpu-support/
-    # reservations:
-    #   devices:
-    #     - driver: nvidia
-    #       count: all
-    #       capabilities: [gpu]
+      # To pass a GPU (e.g., NVIDIA on Linux), uncomment the following and ensure it's a sibling of 'limits':
+      # For Apple Silicon (ARM64), NVIDIA GPUs are not supported.
+      # reservations: # https://docs.docker.com/compose/gpu-support/
+      #   devices:
+      #     - driver: nvidia
+      #       count: all
+      #       capabilities: [gpu]
 
 services:
   # ---------------------------------------------------------
@@ -169,14 +170,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    # To pass a GPU, uncomment the following: https://docs.docker.com/compose/gpu-support/
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
 
   # ---------------------------------------------------------
   # FRONTEND SERVICE: Open WebUI
