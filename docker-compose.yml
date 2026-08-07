@@ -14,7 +14,7 @@ x-llama-build-common: &llama-build-common
     RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
     COPY . /app
     WORKDIR /app
-    
+
     # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
     # For GPU support, add appropriate flags, e.g., -DGGML_CUDA=ON for NVIDIA
     RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out 
@@ -27,16 +27,19 @@ x-llama-build-common: &llama-build-common
     RUN ldconfig
     ENV LLAMA_ENTRYPOINT=$${LLAMA_ENTRYPOINT}
     ENTRYPOINT ["/bin/sh", "-c", "exec \"$$LLAMA_ENTRYPOINT\" \"$$@\"", "--"]
+
 x-llama-rpc-worker-build: &llama-rpc-worker-build
   <<: *llama-build-common
   args:
     LLAMA_RUNTIME_PACKAGES: libgomp1
     LLAMA_ENTRYPOINT: ggml-rpc-server
+
 x-llama-server-head-build: &llama-server-head-build
   <<: *llama-build-common
   args:
     LLAMA_RUNTIME_PACKAGES: libgomp1 curl
     LLAMA_ENTRYPOINT: llama-server
+    
 x-llama-rpc-worker-common: &llama-rpc-worker-common
   platform: ${DOCKER_PLATFORM:-linux/arm64}
   build: *llama-rpc-worker-build
@@ -62,7 +65,6 @@ x-llama-rpc-worker-common: &llama-rpc-worker-common
       limits:
         cpus: '${LLAMA_WORKER_CPUS:-1}'
         memory: ${LLAMA_WORKER_MEMORY:-2G}
-    
     # To pass a GPU, uncomment the following: https://docs.docker.com/compose/gpu-support/
     # reservations:
     #   devices:
