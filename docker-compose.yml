@@ -14,6 +14,7 @@ x-llama-build-common: &llama-build-common
     RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git
     COPY . /app
     WORKDIR /app
+    
     # Compile with RPC enabled and isolate output via CMAKE_INSTALL_PREFIX
     # For GPU support, add appropriate flags, e.g., -DGGML_CUDA=ON for NVIDIA
     RUN cmake -B build -DGGML_RPC=ON -DCMAKE_INSTALL_PREFIX=/out 
@@ -68,6 +69,7 @@ x-llama-rpc-worker-common: &llama-rpc-worker-common
     #     - driver: nvidia
     #       count: all
     #       capabilities: [gpu]
+
 services:
   # ---------------------------------------------------------
   # INIT SERVICE: Automated Model Downloader
@@ -98,6 +100,7 @@ services:
     # This service runs as root to execute `apk add`. It is a short-lived
     # init container, so the security risk is minimal. `read_only: true`
     # is also omitted to allow package installation.
+
   # ---------------------------------------------------------
   # WORKER NODE 1: Custom Compiled llama.cpp RPC Server
   # Official RPC Docs: https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md
@@ -105,12 +108,14 @@ services:
   llama-rpc-worker-1:
     <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-1
+
   # ---------------------------------------------------------
   # WORKER NODE 2: Custom Compiled llama.cpp RPC Server
   # ---------------------------------------------------------
   llama-rpc-worker-2:
     <<: *llama-rpc-worker-common
     container_name: llama-rpc-worker-2
+
   # ---------------------------------------------------------
   # HEAD NODE: Custom Compiled llama.cpp HTTP Server
   # ---------------------------------------------------------
@@ -170,6 +175,7 @@ services:
     #         - driver: nvidia
     #           count: all
     #           capabilities: [gpu]
+
   # ---------------------------------------------------------
   # FRONTEND SERVICE: Open WebUI
   # Official Open WebUI Docs: https://docs.openwebui.com/
@@ -218,6 +224,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
   # ---------------------------------------------------------
   # INIT SERVICE: Hermes custom endpoint bootstrap for llama.cpp
   # Official Hermes Docker Docs: https://hermes-agent.nousresearch.com/docs/user-guide/docker
@@ -256,6 +263,7 @@ services:
         limits:
           cpus: '${HERMES_CPUS:-1}'
           memory: ${HERMES_MEMORY:-1G}
+
   # ---------------------------------------------------------
   # AGENT SERVICE: Hermes Agent Gateway
   # Official Hermes Quickstart: https://hermes-agent.nousresearch.com/docs/getting-started/quickstart
@@ -289,7 +297,8 @@ services:
       - hermes-data:/opt/data
     depends_on:
       hermes-bootstrap:
-        condition: service_completed_successfully  
+        condition: service_completed_successfully
+
 # ---------------------------------------------------------
 # ISOLATED NETWORKS & PERSISTENT VOLUMES
 # Official Docker Networking Docs: https://docs.docker.com/engine/network/
